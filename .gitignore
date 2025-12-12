@@ -36,6 +36,7 @@ Module.symvers
 test_app
 test_isp
 
+
 # Debug files
 *.dSYM/
 *.su
@@ -71,3 +72,9 @@ Thumbs.db
 
 # Device files (in case accidentally committed)
 /dev/
+
+# Project-specific test executables
+poll_test
+chardev_test
+ioctl_test
+EOF
