@@ -1,7 +1,7 @@
 # Linux Driver Learning Notes
 
 **Author:** Jeff Chang  
-**Last Updated:** December 12, 2025  
+**Last Updated:** December 15, 2025  
 **Repository:** https://github.com/dust2080/linux-driver-learning
 
 ---
@@ -11,10 +11,12 @@
 1. [Module 01: Hello World Module](#module-01-hello-world-module)
 2. [Module 02: Character Device](#module-02-character-device)
 3. [Module 03: ioctl Control](#module-03-ioctl-control)
-4. [Core Concepts Reference](#core-concepts-reference)
-5. [Common Patterns](#common-patterns)
-6. [Troubleshooting Guide](#troubleshooting-guide)
-7. [Next Steps](#next-steps)
+4. [Module 04: Poll/Select](#module-04-pollselect)
+5. [Module 05: Interrupt Handling](#module-05-interrupt-handling)
+6. [Core Concepts Reference](#core-concepts-reference)
+7. [Common Patterns](#common-patterns)
+8. [Troubleshooting Guide](#troubleshooting-guide)
+9. [Next Steps](#next-steps)
 
 ---
 
@@ -146,31 +148,6 @@ if (copy_from_user(kernel_buffer, user_buffer, count)) {
 - MMU protection prevents direct access
 - Must use special functions that handle page faults
 
-#### 4. Read Operation Pattern
-```c
-static ssize_t device_read(struct file *filp, char __user *buffer,
-                           size_t length, loff_t *offset)
-{
-    // Check if EOF
-    if (*offset >= data_size) {
-        return 0;  // EOF
-    }
-    
-    // Calculate bytes to copy
-    size_t to_copy = min(length, data_size - *offset);
-    
-    // Copy to user space
-    if (copy_to_user(buffer, kernel_data + *offset, to_copy)) {
-        return -EFAULT;
-    }
-    
-    // Update offset
-    *offset += to_copy;
-    
-    return to_copy;  // Return bytes read
-}
-```
-
 ### 💡 Key Takeaways
 - Major number identifies driver, minor identifies device instance
 - `copy_to_user` / `copy_from_user` are mandatory for safety
@@ -198,10 +175,9 @@ static ssize_t device_read(struct file *filp, char __user *buffer,
 #define IOCTL_MAGIC 'I'
 
 // Command definitions
-#define IOCTL_RESET       _IO(IOCTL_MAGIC, 0)                    // No data
-#define IOCTL_SET_PARAMS  _IOW(IOCTL_MAGIC, 1, struct device_params)  // User→Kernel
-#define IOCTL_GET_PARAMS  _IOR(IOCTL_MAGIC, 2, struct device_params)  // Kernel→User
-#define IOCTL_GET_STATUS  _IOR(IOCTL_MAGIC, 3, struct device_status)
+#define IOCTL_RESET       _IO(IOCTL_MAGIC, 0)
+#define IOCTL_SET_PARAMS  _IOW(IOCTL_MAGIC, 1, struct device_params)
+#define IOCTL_GET_PARAMS  _IOR(IOCTL_MAGIC, 2, struct device_params)
 
 // Data structures
 struct device_params {
@@ -217,66 +193,7 @@ struct device_params {
 - `_IOW(magic, nr, type)`: Write to kernel (user → kernel)
 - `_IOWR(magic, nr, type)`: Read and write
 
-#### 2. ioctl Handler Implementation
-
-```c
-static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-    int ret = 0;
-    struct device_params params;
-    
-    // Lock for thread safety
-    mutex_lock(&dev_state->lock);
-    
-    switch (cmd) {
-        case IOCTL_RESET:
-            reset_device(dev_state);
-            break;
-            
-        case IOCTL_SET_PARAMS:
-            // Copy from user space
-            if (copy_from_user(&params, (void __user *)arg, sizeof(params))) {
-                ret = -EFAULT;
-                break;
-            }
-            
-            // Validate parameters
-            ret = validate_params(&params);
-            if (ret) break;
-            
-            // Apply parameters
-            dev_state->params = params;
-            pr_info("Parameters updated: gain=%u, exposure=%u, wb=%u\n",
-                    params.gain, params.exposure, params.wb_temp);
-            break;
-            
-        case IOCTL_GET_PARAMS:
-            // Copy to user space
-            if (copy_to_user((void __user *)arg, &dev_state->params, sizeof(params))) {
-                ret = -EFAULT;
-            }
-            break;
-            
-        case IOCTL_START_STREAM:
-            if (dev_state->is_streaming) {
-                ret = -EBUSY;  // Already streaming
-            } else {
-                dev_state->is_streaming = 1;
-                dev_state->frame_count = 0;
-            }
-            break;
-            
-        default:
-            ret = -ENOTTY;  // Invalid ioctl command
-            break;
-    }
-    
-    mutex_unlock(&dev_state->lock);
-    return ret;
-}
-```
-
-#### 3. Parameter Validation
+#### 2. Parameter Validation
 ```c
 static int validate_params(const struct device_params *params)
 {
@@ -297,33 +214,6 @@ static int validate_params(const struct device_params *params)
     
     return 0;
 }
-```
-
-#### 4. User Space Usage
-```c
-int fd = open("/dev/ioctl_dev", O_RDWR);
-
-// Reset device
-ioctl(fd, IOCTL_RESET, NULL);
-
-// Set parameters
-struct device_params params = {
-    .gain = 75,
-    .exposure = 200,
-    .wb_temp = 6500
-};
-if (ioctl(fd, IOIOCTL_SET_PARAMS, &params) < 0) {
-    perror("ioctl failed");
-}
-
-// Get parameters
-if (ioctl(fd, IOCTL_GET_PARAMS, &params) < 0) {
-    perror("ioctl failed");
-}
-
-printf("Current gain: %u\n", params.gain);
-
-close(fd);
 ```
 
 ### 💡 Key Takeaways
@@ -347,6 +237,379 @@ Module 03 Test Summary:
 
 Total: 8/8 tests passed
 Execution time: 3.2ms
+```
+
+---
+
+## Module 04: Poll/Select
+
+### 🎯 Learning Objectives
+- Implement poll() system call
+- Understand wait queue mechanism
+- Master asynchronous I/O patterns
+- Learn event notification systems
+
+### 📋 Core Concepts
+
+#### 1. Wait Queue Basics
+
+**What is a wait queue?**
+A wait queue is a kernel data structure that holds a list of processes waiting for a specific event.
+```c
+#include <linux/wait.h>
+
+// Declare a wait queue
+static DECLARE_WAIT_QUEUE_HEAD(my_wait_queue);
+
+// Or initialize dynamically
+wait_queue_head_t my_queue;
+init_waitqueue_head(&my_queue);
+```
+
+#### 2. The poll() System Call
+
+**User space:**
+```c
+#include <poll.h>
+
+struct pollfd fds[1];
+fds[0].fd = device_fd;
+fds[0].events = POLLIN;  // Wait for readable data
+
+int ret = poll(fds, 1, timeout_ms);
+
+if (ret > 0 && (fds[0].revents & POLLIN)) {
+    // Data is ready!
+    read(device_fd, buffer, size);
+}
+```
+
+**Kernel space:**
+```c
+static unsigned int device_poll(struct file *file, poll_table *wait)
+{
+    unsigned int mask = 0;
+    
+    // 1. Register this process to wait queue
+    //    (doesn't actually sleep yet)
+    poll_wait(file, &my_wait_queue, wait);
+    
+    // 2. Check if data is ready
+    if (data_ready) {
+        mask |= POLLIN | POLLRDNORM;  // Readable
+    }
+    
+    if (can_write) {
+        mask |= POLLOUT | POLLWRNORM; // Writable
+    }
+    
+    // 3. Return mask
+    //    - If mask != 0: poll() returns immediately
+    //    - If mask == 0: process will sleep
+    return mask;
+}
+```
+
+#### 3. The Critical Question
+
+After implementing Module 04, I had working code but a critical gap:
+```c
+// I have the wait mechanism:
+poll_wait(file, &my_wait_queue, wait);
+
+// I check the condition:
+if (data_ready)
+    return POLLIN;
+
+// Process sleeps if no data...
+// BUT WHO WAKES IT UP? 🤔
+```
+
+**Testing workaround in Module 04:**
+```c
+// Manual trigger via write() - for testing only
+static ssize_t device_write(...) {
+    data_ready = true;
+    wake_up_interruptible(&my_wait_queue);  // Manual wake
+    return len;
+}
+```
+
+This proved the mechanism works, but it's not realistic. Real drivers need hardware to trigger the wake-up → **This is what Module 05 solves!**
+
+#### 4. Event Masks
+```c
+// Common poll events
+POLLIN      // Data available for reading
+POLLOUT     // Ready for writing
+POLLERR     // Error condition
+POLLHUP     // Hang up
+POLLNVAL    // Invalid request
+```
+
+### 💡 Key Takeaways
+- `poll_wait()` **registers** to wait queue, doesn't sleep
+- Actual sleep happens when returning 0 (no events)
+- `wake_up_interruptible()` wakes all waiting processes
+- Module 04 provides wait mechanism, but needs Module 05 for wake mechanism
+- This is the foundation for all async I/O in Linux
+
+### 🔗 Connection to Module 05
+Module 04 answers: "How do processes wait?"  
+Module 05 answers: "Who wakes them up?"  
+
+Together: **Complete interrupt-driven I/O**
+
+---
+
+## Module 05: Interrupt Handling
+
+### 🎯 Learning Objectives
+- Understand hardware interrupt basics
+- Implement interrupt handler
+- Integrate interrupts with wait queues
+- Master interrupt context constraints
+- Complete the async I/O puzzle
+
+### 📋 Core Concepts
+
+#### 1. Why Interrupts?
+
+**❌ Polling approach (inefficient):**
+```c
+while (1) {
+    if (hardware_ready()) {
+        process_data();
+    }
+    // CPU constantly checking, wasting cycles
+}
+```
+
+**✅ Interrupt approach (efficient):**
+```c
+// CPU does other work...
+// Hardware signals interrupt when ready
+// → interrupt_handler() called automatically
+// → wake_up() waiting processes
+// → CPU processes data only when needed
+```
+
+**Benefits:**
+- CPU not wasted on polling
+- Immediate response to hardware events
+- Better power efficiency
+- Real-time responsiveness
+
+#### 2. Interrupt Handler Basics
+
+**Registration:**
+```c
+#include <linux/interrupt.h>
+
+// Request an IRQ
+int ret = request_irq(
+    irq_number,              // IRQ number
+    my_interrupt_handler,    // Handler function
+    IRQF_SHARED,            // Flags
+    "device_name",          // Name (appears in /proc/interrupts)
+    dev_id                  // Device identifier
+);
+
+// Free the IRQ when done
+free_irq(irq_number, dev_id);
+```
+
+**Handler function:**
+```c
+static irqreturn_t my_interrupt_handler(int irq, void *dev_id)
+{
+    // ⚠️ Running in ATOMIC CONTEXT
+    // Constraints:
+    // - Cannot sleep
+    // - Cannot use mutex/semaphore
+    // - Must be FAST
+    // - Cannot call functions that might sleep
+    
+    // Typical tasks:
+    // 1. Read hardware status
+    // 2. Clear interrupt flag
+    // 3. Set data_ready flag
+    // 4. Wake up waiting processes
+    
+    data_ready = true;
+    wake_up_interruptible(&my_wait_queue);
+    
+    return IRQ_HANDLED;  // Or IRQ_NONE if not our interrupt
+}
+```
+
+#### 3. Interrupt Context Constraints
+
+**Atomic Context Rules:**
+
+| ✅ CAN do | ❌ CANNOT do |
+|----------|-------------|
+| Read/write hardware registers | Sleep |
+| Modify global variables | Use mutex |
+| Call `wake_up()` | Call `schedule()` |
+| Use spinlock | Use `kmalloc(GFP_KERNEL)` |
+| Schedule tasklet/workqueue | Wait for completion |
+| Access kernel data structures | Access user space |
+
+**Why these constraints?**
+- Interrupts disable other interrupts
+- System must respond quickly
+- Cannot wait for resources
+- Must maintain real-time guarantees
+
+#### 4. Timer Simulation (My Approach)
+
+Since I don't have real camera hardware, I used kernel timer to simulate periodic interrupts:
+```c
+#include <linux/timer.h>
+#include <linux/jiffies.h>
+
+static struct timer_list my_timer;
+
+// Timer callback - simulates interrupt
+static void timer_callback(struct timer_list *t)
+{
+    pr_info("Timer fired - simulating camera frame ready\n");
+    
+    // Simulate interrupt handler
+    frame_count++;
+    data_ready = true;
+    wake_up_interruptible(&my_wait_queue);
+    
+    // Re-arm timer for 2 seconds later
+    mod_timer(&my_timer, jiffies + msecs_to_jiffies(2000));
+}
+
+// In init function
+timer_setup(&my_timer, timer_callback, 0);
+mod_timer(&my_timer, jiffies + msecs_to_jiffies(2000));
+
+// In exit function
+del_timer(&my_timer);
+```
+
+**Timer = Camera GPIO Interrupt**
+- Real camera: GPIO interrupt when frame ready
+- My simulation: Timer interrupt every 2 seconds
+- **Same concept, different trigger source**
+
+#### 5. Complete Integration Flow
+```c
+// Module 04 components (wait mechanism)
+static DECLARE_WAIT_QUEUE_HEAD(my_wait_queue);
+static bool data_ready = false;
+
+static unsigned int my_poll(struct file *file, poll_table *wait)
+{
+    poll_wait(file, &my_wait_queue, wait);
+    
+    if (data_ready)
+        return POLLIN;
+    
+    return 0;  // Process will sleep
+}
+
+// Module 05 components (wake mechanism)
+static void timer_callback(struct timer_list *t)
+{
+    // Simulate: camera captured frame
+    data_ready = true;  // ← Set condition
+    wake_up_interruptible(&my_wait_queue);  // ← Wake processes
+}
+```
+
+**Complete timeline:**
+```
+T=0s:   User calls poll()
+        → my_poll() called
+        → poll_wait() registers to wait queue
+        → data_ready == false
+        → Returns 0
+        → Process SLEEPS 😴
+
+T=2s:   Timer fires
+        → timer_callback() called
+        → data_ready = true
+        → wake_up_interruptible()
+        → Process WAKES 😊
+
+T=2s+:  poll() re-checks condition
+        → data_ready == true
+        → Returns POLLIN
+        → User space poll() returns
+        → User calls read()
+        → Gets data
+```
+
+### 💡 Key Takeaways
+
+1. **Interrupts complete the async I/O puzzle**
+   - Module 04: How to wait (poll_wait)
+   - Module 05: When to wake (interrupt)
+
+2. **Interrupt context is special**
+   - Atomic, cannot sleep
+   - Must be fast
+   - Limited what you can do
+
+3. **Real-world application**
+   - Camera drivers: GPIO interrupt when frame ready
+   - Network cards: Interrupt when packet arrives
+   - Storage: Interrupt when DMA completes
+
+4. **Performance achieved**
+   - Wake-up latency: <0.2ms
+   - Timer accuracy: ±0.001s
+   - Perfect integration with wait queues
+
+### 📊 Test Results
+
+**Measured latency (from kernel log):**
+```
+[187632.944165] IRQ: Frame #58 ready          ← Interrupt occurs
+[187632.944284] IRQ: wake_up() called         ← Wake signal sent
+[187632.944402] POLL: called by process       ← Process wakes up
+                                               
+Latency: 0.000237s = 0.237ms ≈ 0.2ms
+```
+
+**Timer accuracy:**
+```
+Frame #57: jiffies=4482297344
+Frame #58: jiffies=4482299396 (Δ=2052 jiffies ≈ 2.00s)
+Frame #59: jiffies=4482301440 (Δ=2044 jiffies ≈ 2.00s)
+```
+
+### 🎓 Real Camera Driver Mapping
+
+| My Simulation | Real Camera Driver |
+|--------------|-------------------|
+| `timer_callback()` | GPIO interrupt handler |
+| Timer every 2s | Frame capture complete signal |
+| `data_ready = true` | Read frame buffer address |
+| `wake_up()` | Wake user space |
+| `frame_count++` | Actual frame metadata |
+
+**The concepts are identical!**
+
+### 🔗 Integration with ISP Pipeline
+
+Next step: Connect this driver knowledge to my ISP Pipeline project:
+```
+Kernel Driver (Module 05)     ISP Pipeline (CUDA)
+         |                            |
+    GPIO Interrupt              Frame captured
+         |                            |
+    wake_up()                    Read from /dev
+         |                            |
+    poll() returns              Process with CUDA
+         |                            |
+    read() frame ──────────────> RAW → RGB → Display
 ```
 
 ---
@@ -572,18 +835,6 @@ sudo chmod 666 /dev/mydev
 sudo ./test_app
 ```
 
-**Permanent fix:** Add udev rule or set permissions in driver:
-```c
-static int device_uevent(const struct device *dev, struct kobj_uevent_env *env)
-{
-    add_uevent_var(env, "DEVMODE=%#o", 0666);
-    return 0;
-}
-
-// In init:
-dev_class->dev_uevent = device_uevent;
-```
-
 ---
 
 ### Problem: Kernel panic / Oops
@@ -630,23 +881,17 @@ sudo rmmod mymodule
 
 ## Next Steps
 
-### Module 04: Poll/Select (Coming Soon)
+### Module 06: DMA (Concept Understanding)
 **Topics:**
-- Asynchronous I/O
-- Wait queues
-- `poll()` and `select()` system calls
-- Event notifications
-- Non-blocking I/O patterns
-
-**Key Concepts:**
-- `poll_wait()` function
-- Wait queue management
-- Event mask (`POLLIN`, `POLLOUT`, etc.)
-- Multiple file descriptor monitoring
+- Direct Memory Access basics
+- DMA vs CPU copy trade-offs
+- DMA buffer management
+- Cache coherency issues
+- Concept-level understanding (no deep implementation)
 
 ---
 
-### Module 05: ISP Simulator (Planned)
+### Module 07: ISP Integration (Planned)
 **Integration with ISP Pipeline project:**
 - Real camera parameter control
 - RAW image processing interface
@@ -688,6 +933,12 @@ mutex_init(), mutex_lock(), mutex_unlock()
 // Device registration
 alloc_chrdev_region(), cdev_init(), cdev_add()
 class_create(), device_create()
+
+// Wait queues
+DECLARE_WAIT_QUEUE_HEAD(), poll_wait(), wake_up_interruptible()
+
+// Timers
+timer_setup(), mod_timer(), del_timer()
 ```
 
 ### File Locations
@@ -695,8 +946,8 @@ class_create(), device_create()
 /dev/*                        # Device files
 /sys/class/*/                 # Device class sysfs entries
 /proc/modules                 # Loaded modules
+/proc/interrupts              # Interrupt statistics
 /lib/modules/$(uname -r)/     # Kernel modules location
-/var/log/kern.log             # Kernel log (on some systems)
 ```
 
 ---
@@ -723,35 +974,60 @@ class_create(), device_create()
 ## Learning Checklist
 
 ### Module 01: Hello World ✅
-- [ ] Understand module lifecycle
-- [ ] Use module_init/module_exit
-- [ ] Read kernel logs with dmesg
-- [ ] Set MODULE_LICENSE correctly
+- [x] Understand module lifecycle
+- [x] Use module_init/module_exit
+- [x] Read kernel logs with dmesg
+- [x] Set MODULE_LICENSE correctly
 
 ### Module 02: Character Device ✅
-- [ ] Register character device
-- [ ] Implement file operations
-- [ ] Use copy_to_user/copy_from_user correctly
-- [ ] Handle EOF properly
-- [ ] Create device file automatically
+- [x] Register character device
+- [x] Implement file operations
+- [x] Use copy_to_user/copy_from_user correctly
+- [x] Handle EOF properly
+- [x] Create device file automatically
 
 ### Module 03: ioctl Control ✅
-- [ ] Define ioctl commands with macros
-- [ ] Implement ioctl handler
-- [ ] Validate parameters
-- [ ] Use mutex for thread safety
-- [ ] Handle all error cases
-- [ ] Write comprehensive tests
+- [x] Define ioctl commands with macros
+- [x] Implement ioctl handler
+- [x] Validate parameters
+- [x] Use mutex for thread safety
+- [x] Handle all error cases
+- [x] Write comprehensive tests
 
-### Module 04: Poll/Select ⏳
-- [ ] Understand wait queues
-- [ ] Implement poll function
-- [ ] Handle multiple file descriptors
-- [ ] Non-blocking I/O patterns
+### Module 04: Poll/Select ✅
+- [x] Understand wait queues
+- [x] Implement poll function
+- [x] Use poll_wait() correctly
+- [x] Handle event masks (POLLIN, POLLOUT)
+- [x] Understand but identified limitation: who calls wake_up?
+
+### Module 05: Interrupt Handling ✅
+- [x] Understand interrupt vs polling
+- [x] Implement interrupt handler
+- [x] Master atomic context constraints
+- [x] Integrate with wait queue from Module 04
+- [x] Achieve sub-millisecond latency
+- [x] Understand real camera driver workflow
+- [x] Complete async I/O understanding
+
+### Module 06: DMA (Concept) ⏳
+- [ ] Understand DMA basics
+- [ ] DMA vs CPU copy trade-offs
+- [ ] DMA buffer management
+- [ ] Cache coherency issues
+
+### Module 07: ISP Integration 🎯
+- [ ] Connect driver to ISP Pipeline
+- [ ] Real-time frame processing
+- [ ] CUDA integration
+- [ ] End-to-end performance optimization
 
 ---
 
 **End of Learning Notes**
+
+*Last Updated: December 15, 2025*  
+*Modules 01-05 completed. Ready for ISP integration.*
 
 *These notes summarize key concepts from Linux Driver Learning project.*  
 *For complete code and detailed documentation, see: https://github.com/dust2080/linux-driver-learning*

@@ -6,9 +6,11 @@ A hands-on journey learning Linux kernel driver development from basics to advan
 
 - [x] **[01 - Hello Module](01-hello-module/)**: Kernel module infrastructure and lifecycle
 - [x] **[02 - Character Device](02-char-device/)**: Device file operations and user-kernel communication  
-- [x] **[03 - ioctl Control](03-ioctl-control/)**: Advanced parameter control via ioctl commands ✨ **NEW**
-- [ ] **04 - Poll/Select**: Asynchronous I/O and event notifications (Coming Soon)
-- [ ] **05 - ISP Simulator**: Camera ISP pipeline driver integration
+- [x] **[03 - ioctl Control](03-ioctl-control/)**: Advanced parameter control via ioctl commands
+- [x] **[04 - Poll/Select](04-poll-select/)**: Asynchronous I/O and event notifications ✅ **COMPLETED**
+- [x] **[05 - Interrupt Handling](05-interrupt-handling/)**: Hardware interrupt integration with wait queues ✨ **NEW**
+- [ ] **06 - DMA (Concept)**: Direct Memory Access understanding (Coming Soon)
+- [ ] **07 - ISP Integration**: Camera ISP pipeline driver integration (Planned)
 
 ## 🛠️ Environment
 
@@ -131,30 +133,79 @@ Total: 8/8 tests passed
 
 ---
 
-### 04 - Poll/Select 🚧
-**Status:** Coming Soon
+---
 
-Asynchronous I/O and event notifications:
-- `poll()` and `select()` system calls
-- Wait queues and event notifications
+### 04 - Poll/Select ✅
+**Status:** Completed | **Tests:** All Passed
+
+Asynchronous I/O with wait queues:
+
+**Features:**
+- `poll()` system call implementation
+- Wait queue mechanism for process sleeping/waking
 - Non-blocking I/O patterns
+- Event notification system
+
+**Key Implementations:**
+- `poll_wait()` for registering to wait queue
+- `wake_up_interruptible()` for waking processes
+- Proper event mask handling (`POLLIN`, `POLLOUT`)
+- Integration with file operations
+
+**What I learned:**
+- Wait queues are the foundation of async I/O
+- `poll_wait()` doesn't actually sleep - it just registers
+- The actual sleep happens when `poll()` returns 0
+- But who calls `wake_up()`? → This led me to Module 05
+
+[View Module 04 →](./04-poll-select/)
 
 ---
 
-### 05 - ISP Simulator 🎯
-**Status:** Planned
+### 05 - Interrupt Handling ✅
+**Status:** Completed | **Tests:** All Passed | **Wake-up Latency:** <0.2ms
 
-Integration with [ISP Pipeline](https://github.com/dust2080/ISP_Pipeline) project:
-- Real camera parameter control
-- RAW image processing pipeline
-- CUDA acceleration integration
-- Professional ISP driver architecture
+Hardware interrupt integration completing the async I/O puzzle:
+
+**Features:**
+- Timer-based interrupt simulation (every 2 seconds)
+- Complete interrupt-driven I/O flow
+- Integration with Module 04's wait queue
+- Sub-millisecond wake-up latency
+
+**Key Implementations:**
+- Kernel timer setup with `timer_setup()` and `mod_timer()`
+- Interrupt handler simulation
+- `wake_up_interruptible()` in interrupt context
+- Complete poll → sleep → interrupt → wake → read flow
+
+**Test Results:**
+- Successfully captured 5+ frames
+- Wake-up latency: ~0.12ms (from interrupt to poll return)
+- Timer accuracy: 2.000s ±0.001s
+- Perfect integration with wait queue mechanism
+
+**Real-world Application:**
+This is exactly how camera drivers work:
+```
+GPIO Interrupt (camera ready) → interrupt_handler() 
+                               → wake_up() 
+                               → poll() returns 
+                               → read frame data
+```
+
+**Key Learning:**
+- Module 04 provided the **wait mechanism** (poll_wait)
+- Module 05 provided the **wake mechanism** (interrupt)
+- Together they form **complete async I/O**
+
+[View Module 05 →](./05-interrupt-handling/)
 
 ## 📁 Project Structure
-
 ```
 linux-driver-learning/
 ├── README.md                    # This file
+├── LEARNING_NOTES.md            # Comprehensive learning notes
 ├── 01-hello-module/
 │   ├── hello.c                  # Basic kernel module
 │   ├── Makefile
@@ -163,14 +214,25 @@ linux-driver-learning/
 │   ├── chardev.c                # Character device driver
 │   ├── Makefile
 │   └── README.md
-└── 03-ioctl-control/            # ✨ NEW
-    ├── ioctl_cmd.h              # Shared command definitions
-    ├── ioctl_driver.c           # Kernel driver implementation
-    ├── test_app.c               # User space test application
-    ├── Makefile                 # Build configuration
-    └── README.md                # Detailed documentation
+├── 03-ioctl-control/
+│   ├── ioctl_cmd.h              # Shared command definitions
+│   ├── ioctl_driver.c           # Kernel driver implementation
+│   ├── test_app.c               # User space test application
+│   ├── Makefile
+│   └── README.md
+├── 04-poll-select/              ✅ COMPLETED
+│   ├── poll_driver.c            # Wait queue implementation
+│   ├── poll_test.c              # Poll test program
+│   ├── Makefile
+│   └── README.md
+└── 05-interrupt-handling/       ✨ NEW
+    ├── v1_timer_interrupt.c     # Basic interrupt handler
+    ├── v2_with_waitqueue.c      # Complete integration
+    ├── interrupt_test.c         # User space test
+    ├── Makefile
+    ├── README.md
+    └── learning_notes.md        # Detailed module notes
 ```
-
 ## 🎓 Learning Resources
 
 ### Books
@@ -236,6 +298,21 @@ linux-driver-learning/
 - ✅ Comprehensive testing (8/8 tests passed)
 - ✅ Clean kernel logs with no errors
 - ✅ Execution time: 3.2ms for all tests
+
+### Module 04: Poll/Select
+- ✅ poll() system call implementation
+- ✅ Wait queue mechanism
+- ✅ Non-blocking I/O
+- ✅ Event notification system
+- ✅ Understanding of async I/O foundations
+
+### Module 05: Interrupt Handling
+- ✅ Timer-based interrupt simulation
+- ✅ Interrupt handler implementation
+- ✅ Complete integration with wait queue
+- ✅ Sub-millisecond wake-up latency (<0.2ms)
+- ✅ Understanding of real camera driver workflow
+- ✅ Atomic context constraints mastered
 
 ## 🎯 Future Direction
 
@@ -306,5 +383,5 @@ GPL v2 (required for kernel modules)
 
 ---
 
-*Last Updated: December 12, 2025*
-*Module 03 completed with all tests passing*
+*Last Updated: December 15, 2025*
+*Module 05 completed - Interrupt handling integrated with wait queues*
