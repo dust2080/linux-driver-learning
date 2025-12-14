@@ -13,7 +13,7 @@
 3. [Module 03: ioctl Control](#module-03-ioctl-control)
 4. [Module 04: Poll/Select](#module-04-pollselect)
 5. [Module 05: Interrupt Handling](#module-05-interrupt-handling)
-6. [Core Concepts Reference](#core-concepts-reference)
+6. [Module 06: DMA Concept Understanding](#module-06-dma-concept-understanding)
 7. [Common Patterns](#common-patterns)
 8. [Troubleshooting Guide](#troubleshooting-guide)
 9. [Next Steps](#next-steps)
@@ -370,6 +370,351 @@ Together: **Complete interrupt-driven I/O**
 - Integrate interrupts with wait queues
 - Master interrupt context constraints
 - Complete the async I/O puzzle
+
+---
+
+## Module 06: DMA Concept Understanding
+
+### 🎯 Learning Objectives
+- Understand what DMA is and why it's needed
+- Compare DMA vs CPU copy approaches
+- Learn DMA's role in camera drivers
+- Connect DMA to ISP Pipeline architecture
+
+### 📋 Core Concepts
+
+#### 1. What is DMA?
+
+**DMA (Direct Memory Access) Controller is an independent hardware device**, just like:
+- Camera sensor (captures images)
+- Network card (sends/receives packets)
+- GPU (processes graphics)
+- **DMA Controller (transfers data)**
+
+**Key Point:** DMA is **NOT** a software technique - it's actual hardware with its own driver!
+```
+System Hardware Components:
+
+┌─────────────┐
+│   Camera    │ ← Hardware #1: Captures frames
+│   Sensor    │   Driver: camera_driver
+└─────────────┘
+
+┌─────────────┐
+│     DMA     │ ← Hardware #2: Transfers data
+│ Controller  │   Driver: dma_driver (kernel provides)
+└─────────────┘
+
+┌─────────────┐
+│   Network   │ ← Hardware #3: Sends/receives packets
+│    Card     │   Driver: network_driver
+└─────────────┘
+```
+
+---
+
+#### 2. Why Do We Need DMA?
+
+**The Problem: CPU Copy is Expensive**
+
+Real-world example - 1080p camera at 30 fps:
+```
+1 frame = 1920 × 1080 × 2 bytes ≈ 4MB
+30 fps = 4MB × 30 = 120 MB/second
+
+If CPU copies byte-by-byte:
+- CPU must perform 4 million operations per frame
+- 30 frames/second = 120 million operations/second
+- CPU usage: 30-60% just for moving data!
+- Other tasks (ISP processing, UI, network) become slow
+```
+
+**The Solution: DMA**
+```
+Step 1: CPU configures DMA (takes microseconds)
+        "Move 4MB from camera to buffer"
+        
+Step 2: DMA hardware does the transfer (1-2ms)
+        CPU is FREE to do other work!
+        
+Step 3: DMA sends interrupt when done
+        CPU processes the frame
+
+Result: CPU usage drops from 60% to 5%
+```
+
+---
+
+#### 3. CPU Copy vs DMA Comparison Table
+
+| Aspect | CPU Copy | DMA |
+|--------|----------|-----|
+| **Who transfers?** | CPU (byte by byte) | DMA hardware (bulk transfer) |
+| **CPU during transfer** | 100% busy | Free for other tasks |
+| **Transfer speed** | Slower (CPU limited) | Faster (dedicated bus) |
+| **CPU usage** | 30-60% | ~5% |
+| **Best for** | Small data (<4KB) | Large data (MB+) |
+| **Implementation** | `memcpy()`, `copy_to_user()` | `dmaengine_prep_*()` API |
+| **Example use** | ioctl parameters | Camera frames, network packets |
+
+**Real numbers for 1080p @ 30fps camera:**
+- CPU copy: 60% CPU usage → other tasks slow
+- DMA: 5% CPU usage → smooth multitasking
+
+---
+
+#### 4. Two-Interrupt Model in Camera Drivers
+
+**Complete DMA timeline:**
+```
+T=0s:   Camera captures frame
+        │
+        ├─> Hardware sends Interrupt #1
+        │   "Frame ready in sensor buffer!"
+        ▼
+T=0.001s: CPU handles interrupt
+        │
+        ├─> camera_irq_handler() runs:
+        │   - dma_setup(src=camera_reg, dst=kernel_buffer, size=4MB)
+        │   - dma_start()
+        │   - return  ← CPU is FREE!
+        ▼
+T=0.001s-0.003s: DMA hardware transfers (1-2ms)
+        │        CPU doing OTHER work:
+        │        - Processing previous frame
+        │        - Handling network packets
+        │        - Running user programs
+        ▼
+T=0.003s: DMA finishes transfer
+        │
+        ├─> Hardware sends Interrupt #2
+        │   "Transfer complete!"
+        ▼
+T=0.003s: CPU handles interrupt
+        │
+        ├─> dma_complete_handler() runs:
+        │   - data_ready = true
+        │   - wake_up_interruptible(&queue)
+        ▼
+        User space poll() wakes up
+        → read() gets frame
+        → ISP Pipeline processes it
+```
+
+**Key Insight:**
+- **Interrupt #1 (Camera):** Triggers DMA setup
+- **CPU is free during DMA transfer** (1-2ms)
+- **Interrupt #2 (DMA):** Wakes up user space
+- This is exactly what Module 05's timer simulated!
+
+---
+
+#### 5. Who Writes the DMA Driver?
+
+**Layered Architecture:**
+```
+┌────────────────────────────────┐
+│   Camera Driver (YOU write)    │  ← Your responsibility
+│   - camera_irq_handler()       │  ← Calls DMA API
+│   - dmaengine_prep_slave_*()   │
+└────────────┬───────────────────┘
+             │ Uses API
+             ▼
+┌────────────────────────────────┐
+│   DMA Engine Framework         │  ← Linux kernel provides
+│   (drivers/dma/dmaengine.c)    │  ← Standard API layer
+└────────────┬───────────────────┘
+             │ Calls
+             ▼
+┌────────────────────────────────┐
+│   Platform DMA Driver          │  ← SoC vendor provides
+│   - Qualcomm BAM DMA           │  ← MediaTek, Qualcomm, etc.
+│   - MediaTek APDMA             │
+│   - i.MX SDMA                  │
+└────────────────────────────────┘
+```
+
+**Answer: 99% of the time, you DON'T write DMA drivers!**
+- Linux provides DMA Engine Framework
+- SoC vendor provides platform driver
+- You just **call the API** in your camera driver
+
+---
+
+#### 6. Integration with ISP Pipeline
+
+**Complete data flow from sensor to display:**
+```
+┌──────────────────┐
+│  Camera Sensor   │  Hardware: Captures RAW image
+└────────┬─────────┘
+         │ MIPI CSI-2 interface
+         │ IRQ #1: "Frame captured"
+         ▼
+┌──────────────────┐
+│       CPU        │  Software: Configure DMA
+│ (camera_driver)  │  (takes ~0.01ms)
+└────────┬─────────┘
+         │ Setup DMA controller
+         ▼
+┌──────────────────┐
+│  DMA Controller  │  Hardware: Auto-transfer
+│                  │  (CPU free for 1-2ms)
+└────────┬─────────┘
+         │ Memory bus (high speed)
+         │ IRQ #2: "Transfer complete"
+         ▼
+┌──────────────────┐
+│  Frame Buffer    │  Kernel: Ring buffer
+│  (Kernel Space)  │  (multiple buffers)
+└────────┬─────────┘
+         │ read() / mmap()
+         │ poll/select (Module 04)
+         ▼
+┌──────────────────┐
+│  ISP Pipeline    │  User Space: Processing
+│  (User Space)    │  - Demosaic
+│                  │  - AWB
+│  My Project:     │  - Gamma
+│  C++/CUDA        │  - Bilateral Filter
+│  1930x speedup   │  (CUDA accelerated)
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│     Display      │  Show or save result
+└──────────────────┘
+```
+
+**Where each module fits:**
+- **Module 02-03:** Driver infrastructure (char device, ioctl)
+- **Module 04:** Wait mechanism (poll/select)
+- **Module 05:** Wake mechanism (interrupt)
+- **Module 06:** Data transfer (DMA) ← Concept level
+- **ISP Pipeline:** Processing (already complete!)
+
+---
+
+#### 7. Relationship with Module 05
+
+**Module 05 simplified the two-interrupt model:**
+```c
+// Module 05: Simplified (one interrupt)
+static void simulate_camera_interrupt(void) {
+    // Simulate: Camera ready + DMA complete in ONE step
+    snprintf(frame_buffer, ...);  // ← Pretend data already in buffer
+    data_ready = true;
+    wake_up_interruptible(&queue);
+}
+
+// Real system: Two separate interrupts
+// Interrupt #1: Camera ready
+static void camera_irq_handler(void) {
+    dma_setup(...);
+    dma_start();  // ← Just configure and start
+    // CPU returns immediately
+}
+
+// Interrupt #2: DMA complete (1-2ms later)
+static void dma_complete_handler(void) {
+    data_ready = true;
+    wake_up_interruptible(&queue);
+}
+```
+
+**Module 05 merged both interrupts - this is fine for learning!**
+The concepts are identical, just simplified.
+
+---
+
+### 💡 Key Takeaways
+
+#### 1. DMA is Independent Hardware
+- Like camera sensor, network card, GPU
+- Has its own driver (provided by kernel/vendor)
+- You just call the API, don't write DMA driver
+
+#### 2. Why DMA Matters
+- Frees CPU from repetitive data movement
+- Essential for high-bandwidth devices (camera, network, storage)
+- Reduces CPU usage from 60% to 5% in camera example
+
+#### 3. Two Interrupts
+- Camera Ready → Configure DMA
+- DMA Complete → Wake user space
+- CPU is free during the actual transfer
+
+#### 4. Real-world Numbers
+- 1080p @ 30fps = 120 MB/second
+- Without DMA: 60% CPU usage
+- With DMA: 5% CPU usage
+
+#### 5. Integration with My Projects
+- Module 05: Interrupt handling (one interrupt simplified)
+- Module 06: DMA concept (two interrupts explained)
+- ISP Pipeline: User space processing (CUDA accelerated)
+- Complete flow: Sensor → DMA → Driver → ISP → Display
+
+---
+
+### 🎤 Interview Story Script
+
+**When asked: "What is DMA and why is it important?"**
+```
+"DMA stands for Direct Memory Access. It's an independent hardware 
+controller that transfers data between devices and memory without 
+CPU involvement.
+
+In my driver learning, I focused on camera drivers. A 1080p camera 
+at 30fps generates 120 MB/second of data. If the CPU had to copy 
+this data byte-by-byte, it would consume 30-60% of CPU time.
+
+With DMA, the CPU only configures the transfer once - telling the 
+DMA controller the source, destination, and size. Then the DMA 
+hardware handles the actual transfer while the CPU does other work. 
+When complete, DMA sends an interrupt.
+
+This reduces CPU usage from 60% to about 5%, which is critical for 
+real-time systems. The saved CPU time can be used for actual image 
+processing - like my ISP Pipeline project that uses CUDA for 
+1930x acceleration.
+
+The key is understanding there are two interrupts in a camera driver:
+first when the camera captures a frame, second when DMA finishes 
+transferring it. This connects to my Module 05 work on interrupt 
+handling and Module 04 on wait queues."
+```
+
+---
+
+### 📊 Concept Checklist
+
+After Module 06, you should understand:
+
+- [x] What DMA is (independent hardware, not software)
+- [x] Why DMA is needed (CPU efficiency)
+- [x] DMA vs CPU copy trade-offs
+- [x] Two-interrupt model in camera drivers
+- [x] Who writes DMA drivers (not you, usually)
+- [x] How DMA connects to ISP Pipeline
+- [x] Real-world data volume calculations
+- [x] Interview explanation ready
+
+---
+
+### 🔗 Connection to Other Modules
+```
+Module 01-02: Driver basics
+Module 03: Control interface (ioctl)
+Module 04: Wait mechanism (poll/select)
+Module 05: Wake mechanism (interrupt)
+Module 06: Data transfer (DMA concept) ✅ ← You are here
+Module 07: Integration (multi-process or ISP)
+```
+
+**Next step:** Apply all concepts in real integration!
+
+---
 
 ### 📋 Core Concepts
 
@@ -1010,11 +1355,15 @@ timer_setup(), mod_timer(), del_timer()
 - [x] Understand real camera driver workflow
 - [x] Complete async I/O understanding
 
-### Module 06: DMA (Concept) ⏳
-- [ ] Understand DMA basics
-- [ ] DMA vs CPU copy trade-offs
-- [ ] DMA buffer management
-- [ ] Cache coherency issues
+### Module 06: DMA Concept ✅
+- [x] Understand DMA as independent hardware
+- [x] DMA vs CPU copy (60% → 5% CPU usage)
+- [x] Two-interrupt model (Camera + DMA)
+- [x] Linux DMA Engine Framework API
+- [x] Integration with camera driver architecture
+- [x] Connection to ISP Pipeline data flow
+- [x] Real-world data calculations (120 MB/s)
+- [x] Interview-ready explanations
 
 ### Module 07: ISP Integration 🎯
 - [ ] Connect driver to ISP Pipeline
@@ -1027,7 +1376,7 @@ timer_setup(), mod_timer(), del_timer()
 **End of Learning Notes**
 
 *Last Updated: December 15, 2025*  
-*Modules 01-05 completed. Ready for ISP integration.*
+*Modules 01-06 completed. DMA concept understood. Ready for advanced integration.*
 
 *These notes summarize key concepts from Linux Driver Learning project.*  
 *For complete code and detailed documentation, see: https://github.com/dust2080/linux-driver-learning*

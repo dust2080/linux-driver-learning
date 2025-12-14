@@ -8,9 +8,9 @@ A hands-on journey learning Linux kernel driver development from basics to advan
 - [x] **[02 - Character Device](02-char-device/)**: Device file operations and user-kernel communication  
 - [x] **[03 - ioctl Control](03-ioctl-control/)**: Advanced parameter control via ioctl commands
 - [x] **[04 - Poll/Select](04-poll-select/)**: Asynchronous I/O and event notifications ✅ **COMPLETED**
-- [x] **[05 - Interrupt Handling](05-interrupt-handling/)**: Hardware interrupt integration with wait queues ✨ **NEW**
-- [ ] **06 - DMA (Concept)**: Direct Memory Access understanding (Coming Soon)
-- [ ] **07 - ISP Integration**: Camera ISP pipeline driver integration (Planned)
+- [x] **[05 - Interrupt Handling](05-interrupt-handling/)**: Hardware interrupt integration with wait queues ✅ **COMPLETED**
+- [x] **[06 - DMA Concept](06-dma-concept/)**: Direct Memory Access understanding ✅ **COMPLETED**
+- [ ] **07 - Advanced Integration**: Multi-process support or ISP integration (Planned)
 
 ## 🛠️ Environment
 
@@ -201,6 +201,45 @@ GPIO Interrupt (camera ready) → interrupt_handler()
 
 [View Module 05 →](./05-interrupt-handling/)
 
+---
+
+### 06 - DMA Concept ✅
+**Status:** Completed | **Concept Understanding**
+
+Direct Memory Access (DMA) concept and application in camera drivers:
+
+**Key Concepts:**
+- DMA as independent hardware (like camera sensor, network card)
+- DMA vs CPU copy: 100% CPU → 5% CPU usage for large data transfers
+- Two interrupts: Camera Ready + DMA Complete
+- Integration with ISP Pipeline architecture
+
+**What I Learned:**
+- DMA Controller is separate hardware with its own driver
+- In camera systems: Sensor → DMA → Kernel Buffer → User Space (ISP)
+- Linux DMA Engine Framework provides APIs (don't write DMA driver yourself)
+- Real-world data volume: 1080p @ 30fps = 120 MB/second
+
+**Real-world Application:**
+```
+Camera Sensor (4MB frame)
+    ↓ Interrupt #1: Frame captured
+CPU configures DMA
+    ↓ DMA hardware transfers (CPU does other work)
+    ↓ Interrupt #2: Transfer complete
+wake_up() → User Space ISP Pipeline
+```
+
+**Interview-Ready Explanation:**
+- Can explain why DMA is needed for high-bandwidth devices
+- Understand the complete data flow from hardware to application
+- Know when to use DMA vs CPU copy
+- Connect to ISP Pipeline project (driver → user space processing)
+
+[View Module 06 →](./06-dma-concept/)
+
+---
+
 ## 📁 Project Structure
 ```
 linux-driver-learning/
@@ -225,13 +264,15 @@ linux-driver-learning/
 │   ├── poll_test.c              # Poll test program
 │   ├── Makefile
 │   └── README.md
-└── 05-interrupt-handling/       ✨ NEW
-    ├── v1_timer_interrupt.c     # Basic interrupt handler
-    ├── v2_with_waitqueue.c      # Complete integration
-    ├── interrupt_test.c         # User space test
-    ├── Makefile
-    ├── README.md
-    └── learning_notes.md        # Detailed module notes
+├── 05-interrupt-handling/       ✅ COMPLETED
+│   ├── v1_timer_interrupt.c     # Basic interrupt handler
+│   ├── v2_with_waitqueue.c      # Complete integration
+│   ├── interrupt_test.c         # User space test
+│   ├── Makefile
+│   ├── README.md
+│   └── learning_notes.md        # Detailed module notes
+└── 06-dma-concept/              ✅ COMPLETED
+    └── README.md                # DMA concept explanation
 ```
 ## 🎓 Learning Resources
 
@@ -314,6 +355,15 @@ linux-driver-learning/
 - ✅ Understanding of real camera driver workflow
 - ✅ Atomic context constraints mastered
 
+### Module 06: DMA Concept
+- ✅ Understanding DMA as independent hardware
+- ✅ DMA vs CPU copy trade-offs (100% → 5% CPU)
+- ✅ Two-interrupt model (Camera Ready + DMA Complete)
+- ✅ Integration with camera driver architecture
+- ✅ Connection to ISP Pipeline data flow
+- ✅ Interview-ready explanations
+- ✅ Real-world data volume calculations (120 MB/s)
+
 ## 🎯 Future Direction
 
 This learning project will culminate in an **ISP Driver Simulator** that integrates with my [ISP Pipeline](https://github.com/dust2080/ISP_Pipeline) project, demonstrating:
@@ -384,4 +434,5 @@ GPL v2 (required for kernel modules)
 ---
 
 *Last Updated: December 15, 2025*
-*Module 05 completed - Interrupt handling integrated with wait queues*
+*Module 06 completed - DMA concept understanding integrated with driver architecture*
+
