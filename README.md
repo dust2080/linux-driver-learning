@@ -3,14 +3,13 @@
 A hands-on journey learning Linux kernel driver development from basics to advanced device control. This project demonstrates systematic progression from simple modules to complex ISP (Image Signal Processor) parameter control, connecting to my [ISP Pipeline](https://github.com/dust2080/ISP_Pipeline) project.
 
 ## 🎯 Learning Path
-
-- [x] **[01 - Hello Module](01-hello-module/)**: Kernel module infrastructure and lifecycle
-- [x] **[02 - Character Device](02-char-device/)**: Device file operations and user-kernel communication  
-- [x] **[03 - ioctl Control](03-ioctl-control/)**: Advanced parameter control via ioctl commands
-- [x] **[04 - Poll/Select](04-poll-select/)**: Asynchronous I/O and event notifications ✅ **COMPLETED**
-- [x] **[05 - Interrupt Handling](05-interrupt-handling/)**: Hardware interrupt integration with wait queues ✅ **COMPLETED**
-- [x] **[06 - DMA Concept](06-dma-concept/)**: Direct Memory Access understanding ✅ **COMPLETED**
-- [ ] **07 - Advanced Integration**: Multi-process support or ISP integration (Planned)
+ 01 - Hello Module: Kernel module infrastructure and lifecycle
+ 02 - Character Device: Device file operations and user-kernel communication
+ 03 - ioctl Control: Advanced parameter control via ioctl commands
+ 04 - Poll/Select: Asynchronous I/O and event notifications ✅ COMPLETED
+ 05 - Interrupt Handling: Hardware interrupt integration with wait queues ✅ COMPLETED
+ 06 - DMA Concept: Direct Memory Access understanding ✅ COMPLETED
+ 07 - Network Streaming: TCP/IP integration with ISP Pipeline ✅ COMPLETED
 
 ## 🛠️ Environment
 
@@ -239,6 +238,52 @@ wake_up() → User Space ISP Pipeline
 [View Module 06 →](./06-dma-concept/)
 
 ---
+
+### 07 - Network Streaming & ISP Integration ✅
+Status: Completed | Frames Processed: 5 | Total Latency: <100ms
+
+Complete end-to-end camera system:
+
+Features:
+- TCP socket server/client architecture
+- Real 640×480 RAW12 frame streaming (614,400 bytes/frame)
+- poll()-based blocking I/O (CPU-efficient)
+- Integration with ISP Pipeline (7-stage processing)
+- Automatic 5-frame capture and processing
+
+Key Implementations:
+- Client-server TCP communication
+- Large binary data transfer
+- Cross-machine integration (VM → macOS)
+- ISP Pipeline invocation from C++
+- Complete driver-to-image workflow
+
+Architecture:
+```
+Driver (VM) → frame_streamer → Network → frame_receiver (macOS) → ISP Pipeline → PNG
+```
+
+Test Results:
+- ✓ 5 frames successfully transmitted
+- ✓ Each frame unique (verified via MD5)
+- ✓ Complete ISP processing (RAW → PNG)
+- ✓ Network transfer: ~50ms/frame
+- ✓ ISP processing: ~2ms/frame
+
+Real-world Application: This demonstrates Edge-to-Cloud architecture where:
+- Edge device (driver) captures sensor data
+- Network transmits to processing server
+- Cloud (ISP) performs compute-intensive operations
+- Complete decoupling of capture and processing
+
+What I learned:
+- TCP socket programming in C/C++
+- Large data transfer strategies
+- System integration across machines
+- Blocking I/O with poll() (Module 04+05 combined)
+- Real-world camera system architecture
+
+[View Module 07 →](07-network-streaming/)
 
 ## 📁 Project Structure
 ```

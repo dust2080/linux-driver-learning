@@ -78,3 +78,7 @@ poll_test
 chardev_test
 ioctl_test
 EOF
+
+# Module 07 network streaming
+07-network-streaming/frame_streamer
+07-network-streaming/test/*.pyc

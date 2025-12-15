@@ -38,8 +38,14 @@ MODULE_VERSION("2.0");
  * Device Information
  * ============================================ */
 
-#define DEVICE_NAME "interrupt_dev"
-#define CLASS_NAME "interrupt_class"
+#define DEVICE_NAME "camera"
+#define CLASS_NAME "camera_class"
+
+/* Image dimensions */
+#define FRAME_WIDTH 640
+#define FRAME_HEIGHT 480
+#define BYTES_PER_PIXEL 2  // RAW12 stored as 16-bit
+#define FRAME_SIZE (FRAME_WIDTH * FRAME_HEIGHT * BYTES_PER_PIXEL)
 
 static int major_number;
 static struct class *dev_class = NULL;
@@ -68,13 +74,36 @@ static bool data_ready = false;
  * Simulates camera frame data
  */
 static int frame_count = 0;
-static char frame_buffer[128];
+static char *frame_buffer = NULL;  // Dynamically allocated
 
 /* ============================================
  * Timer (Simulating Hardware Interrupt)
  * ============================================ */
 
 static struct timer_list my_timer;
+
+/* ============================================
+ * Test Pattern Generation
+ * ============================================ */
+
+/*
+ * Generate a simple test pattern for RAW image
+ * Pattern: Gradient from top-left (dark) to bottom-right (bright)
+ * Each frame is slightly different due to frame_count offset
+ */
+static void generate_test_pattern(void)
+{
+    int i, j;
+    uint16_t *pixels = (uint16_t *)frame_buffer;
+    
+    for (i = 0; i < FRAME_HEIGHT; i++) {
+        for (j = 0; j < FRAME_WIDTH; j++) {
+            /* Simple gradient with frame_count offset for variation */
+            /* RAW12: 12-bit values (0-4095) */
+            pixels[i * FRAME_WIDTH + j] = ((i + j + frame_count * 10) * 16) % 4096;
+        }
+    }
+}
 
 /* ============================================
  * Interrupt Handler Simulation
@@ -90,7 +119,7 @@ static struct timer_list my_timer;
  * 
  * Here we simulate by:
  * - Incrementing frame counter
- * - Creating dummy frame data
+ * - Generating test pattern image
  * - Setting data_ready flag
  * - Waking up waiting processes
  */
@@ -98,12 +127,12 @@ static void simulate_camera_interrupt(void)
 {
     /* Simulate: Camera captured a new frame */
     frame_count++;
-    snprintf(frame_buffer, sizeof(frame_buffer), 
-             "Frame #%d captured at jiffies=%lu\n", 
-             frame_count, jiffies);
     
-    pr_info("IRQ: Frame #%d ready (simulating camera interrupt)\n", 
-            frame_count);
+    /* Generate test pattern image */
+    generate_test_pattern();
+    
+    pr_info("IRQ: Frame #%d ready (%dx%d, %d bytes)\n", 
+            frame_count, FRAME_WIDTH, FRAME_HEIGHT, FRAME_SIZE);
     
     /*
      * KEY STEP 1: Set data ready flag
@@ -150,7 +179,7 @@ static void timer_callback(struct timer_list *t)
  * ============================================ */
 
 /*
- * open() - Called when user opens /dev/interrupt_dev
+ * open() - Called when user opens /dev/camera
  */
 static int my_open(struct inode *inode, struct file *file)
 {
@@ -187,7 +216,7 @@ static ssize_t my_read(struct file *file, char __user *buf,
     }
     
     /* Calculate how many bytes to copy */
-    bytes_to_copy = min(count, strlen(frame_buffer));
+    bytes_to_copy = min(count, (size_t)FRAME_SIZE);
     
     /* Copy data to user space */
     ret = copy_to_user(buf, frame_buffer, bytes_to_copy);
@@ -303,7 +332,19 @@ static int __init interrupt_v2_init(void)
     
     pr_info("Device created: /dev/%s\n", DEVICE_NAME);
     
-    /* 6. Start timer (simulating periodic camera interrupts) */
+    /* 6. Allocate frame buffer */
+    frame_buffer = kmalloc(FRAME_SIZE, GFP_KERNEL);
+    if (!frame_buffer) {
+        device_destroy(dev_class, dev);
+        class_destroy(dev_class);
+        cdev_del(&my_cdev);
+        unregister_chrdev_region(dev, 1);
+        pr_err("Failed to allocate frame buffer\n");
+        return -ENOMEM;
+    }
+    pr_info("Frame buffer allocated: %d bytes\n", FRAME_SIZE);
+    
+    /* 7. Start timer (simulating periodic camera interrupts) */
     timer_setup(&my_timer, timer_callback, 0);
     mod_timer(&my_timer, jiffies + msecs_to_jiffies(2000));
     
@@ -325,6 +366,11 @@ static void __exit interrupt_v2_exit(void)
     
     /* Stop timer */
     del_timer(&my_timer);
+    
+    /* Free frame buffer */
+    if (frame_buffer) {
+        kfree(frame_buffer);
+    }
     
     /* Remove device */
     device_destroy(dev_class, dev);
