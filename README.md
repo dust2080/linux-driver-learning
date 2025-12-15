@@ -316,8 +316,14 @@ linux-driver-learning/
 │   ├── Makefile
 │   ├── README.md
 │   └── learning_notes.md        # Detailed module notes
-└── 06-dma-concept/              ✅ COMPLETED
-    └── README.md                # DMA concept explanation
+├── 06-dma-concept/              ✅ COMPLETED
+│   └── README.md                # DMA concept explanation
+└── 07-network-streaming/        ✅ COMPLETED
+    ├── frame_streamer.c         # TCP server (VM side)
+    ├── Makefile
+    ├── README.md
+    └── test/
+        └── tcp_server.py        # Network test script
 ```
 ## 🎓 Learning Resources
 
@@ -409,6 +415,20 @@ linux-driver-learning/
 - ✅ Interview-ready explanations
 - ✅ Real-world data volume calculations (120 MB/s)
 
+### Module 07: Network Streaming
+- ✅ TCP socket server/client implementation
+- ✅ poll()-based blocking I/O (CPU-efficient waiting)
+- ✅ 640×480 RAW12 frame transmission (614,400 bytes/frame)
+- ✅ Cross-machine integration (VM → macOS)
+- ✅ ISP Pipeline integration via network
+- ✅ Automatic 5-frame capture and processing
+- ✅ Complete driver-to-PNG workflow
+- ✅ Network transfer: ~50ms/frame
+- ✅ Total latency: <100ms (capture to processed image)
+- ✅ Edge-to-Cloud architecture demonstration
+- ✅ Large binary data transfer strategies
+- ✅ System integration across different machines
+
 ## 🎯 Future Direction
 
 This learning project will culminate in an **ISP Driver Simulator** that integrates with my [ISP Pipeline](https://github.com/dust2080/ISP_Pipeline) project, demonstrating:
@@ -478,6 +498,5 @@ GPL v2 (required for kernel modules)
 
 ---
 
-*Last Updated: December 15, 2025*
-*Module 06 completed - DMA concept understanding integrated with driver architecture*
-
+*Last Updated: December 16, 2025*
+*Module 07 completed - Network Streaming & ISP Integration
